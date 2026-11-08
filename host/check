@@ -1,0 +1,87 @@
+#!/bin/sh
+# The proof that the client is a tailnet node and not just a program that
+# talks to a control server: it is started, and then the peer -- an ordinary
+# tailscaled -- is asked to reach it three ways.
+#
+#   disco   a ping to the disco key, which goes over DERP or a direct path
+#   icmp    an IPv4 echo request through WireGuard, answered by netstack.c
+#   tsmp    Tailscale's own one-packet ping, also through WireGuard
+#
+# Then the other direction: the client pings the peer itself, which is the
+# WireGuard handshake run as initiator rather than responder.
+#
+#   host/check [--derp-only]    --derp-only blocks the direct UDP path, so
+#                               everything has to go through the relay
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd)"
+TS="$(cd "$HERE/.." && pwd)"
+WORK="${TS_WORK:-$TS/work}"
+LOG="$WORK/check.log"
+DERP_ONLY=0
+UDP_ARG=""
+if [ "${1:-}" = "--derp-only" ]; then DERP_ONLY=1; UDP_ARG="--no-udp"; fi
+
+make -C "$HERE" -s tailscale-host
+KEY="$("$TS/dev/testnet" key)"
+: >"$LOG"
+# --derp 999 is the testnet's only region; --ping 5 has the client ping the
+# peer on its own, which is the direction the peer cannot start.
+"$HERE/tailscale-host" --server https://127.0.0.1:18443 --authkey "$KEY" \
+	--state "$WORK/host-state" --hostname psp-host --derp 999 --ping 5 --run 45 \
+	$UDP_ARG >"$LOG" 2>&1 &
+CLIENT=$!
+trap 'kill $CLIENT 2>/dev/null || true' EXIT INT TERM
+
+IP=""
+for i in $(seq 1 100); do
+	IP="$(sed -n 's/.*status: \(100\.[0-9.]*\),.*/\1/p' "$LOG" | head -1)"
+	[ -n "$IP" ] && break
+	kill -0 $CLIENT 2>/dev/null || break
+	sleep 0.3
+done
+[ -n "$IP" ] || { echo "the client never got an address; $LOG:"; tail -20 "$LOG"; exit 1; }
+echo "client is $IP"
+
+fails=0
+try() {
+	name="$1"; shift
+	if out="$("$TS/dev/testnet" peer "$@" 2>&1)"; then
+		echo "ok   $name: $(echo "$out" | tail -1)"
+	else
+		echo "FAIL $name: $(echo "$out" | tail -1)"
+		fails=$((fails + 1))
+	fi
+}
+
+# --until-direct=false so that a pong over the relay counts: without UDP
+# there is no direct path to wait for, and with UDP the path is checked
+# below, in the client's own log.
+try "disco ping from the peer" ping -c 2 --until-direct=false --timeout 8s "$IP"
+try "icmp ping from the peer " ping -c 2 --icmp --timeout 8s "$IP"
+try "tsmp ping from the peer " ping -c 2 --tsmp --timeout 8s "$IP"
+
+# And our own pings, which the client logs when the echo reply comes back.
+sleep 6
+if grep -q "ping: .* answered in" "$LOG"; then
+	echo "ok   icmp ping from the client: $(grep -m1 'answered in' "$LOG" | sed 's/.*ping: //')"
+else
+	echo "FAIL icmp ping from the client: no echo reply"
+	fails=$((fails + 1))
+fi
+if [ "$DERP_ONLY" = 1 ]; then
+	if grep -q "disco: direct path" "$LOG"; then
+		echo "FAIL a direct path was found although UDP was off"
+		fails=$((fails + 1))
+	else
+		echo "ok   everything went through the relay"
+	fi
+elif grep -q "disco: direct path" "$LOG"; then
+	echo "ok   direct path: $(grep -m1 'direct path' "$LOG" | sed 's/.*disco: //')"
+else
+	echo "FAIL no direct path was found"
+	fails=$((fails + 1))
+fi
+
+kill $CLIENT 2>/dev/null || true
+[ "$fails" = 0 ] && echo "all passed" || echo "$fails failed"
+exit "$fails"

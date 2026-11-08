@@ -1,0 +1,5 @@
+# The host build's tools, so the desk needs nothing installed but docker.
+FROM debian:trixie
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+      gcc make wget ca-certificates autoconf automake libtool libcjson-dev python3 \
+    && rm -rf /var/lib/apt/lists/*

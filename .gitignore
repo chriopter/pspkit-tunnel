@@ -1,0 +1,19 @@
+# Objects and dependency files, next to their sources
+*.o
+*.d
+
+# What build.mak leaves in test/psp/
+*.elf
+*.prx
+EBOOT.PBP
+PARAM.SFO
+
+# host/: the desk build's programs
+/host/tailscale-host
+/host/selftest
+
+# dev/testnet and host/: the CA, Headscale's state, the peer, wolfSSL for the host
+/work/
+
+# A run in PPSSPP
+ppsspp.out

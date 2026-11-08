@@ -1,0 +1,185 @@
+#!/bin/sh
+# A tailnet of our own on the host, for the PSP client to join: Headscale as
+# the control server with its embedded DERP relay, behind a throwaway CA, and
+# one ordinary tailscaled in userspace mode as the peer the PSP talks to.
+# Nothing here touches the host's own tailscaled or its tailnet: the peer has
+# its own state directory, its own socket and its own port.
+#
+#   testnet up       CA, config, Headscale, the peer; prints the auth key
+#   testnet down     both stopped, state kept
+#   testnet reset    both stopped and every node forgotten
+#   testnet key      a fresh reusable pre-auth key
+#   testnet peer ... the tailscale CLI, pointed at the peer
+#                    (testnet peer status, testnet peer ping 100.64.0.2)
+#   testnet hs ...   the headscale CLI inside the container
+#
+# Control and DERP share one TLS listener on 127.0.0.1:18443; STUN is on
+# 13478. The ports are off the usual ones on purpose: 8443 is often taken
+# already, 3478 belongs to anybody's real DERP.
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WORK="${TS_WORK:-$HERE/../work}"
+PORT=18443
+URL="https://127.0.0.1:$PORT"
+HS=pspdx-headscale
+PEER_UNIT=pspdx-ts-peer
+# A unix socket path is capped near 108 bytes, which a worktree path passes.
+PEER_SOCK="${XDG_RUNTIME_DIR:-/tmp}/pspdx-ts-peer.sock"
+
+certs() {
+	mkdir -p "$WORK"
+	[ -f "$WORK/ca.crt" ] && return 0
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+		-keyout "$WORK/ca.key" -out "$WORK/ca.crt" -days 30 -subj "/CN=testnet CA" >/dev/null 2>&1
+	openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+		-keyout "$WORK/srv.key" -out "$WORK/srv.csr" -subj "/CN=127.0.0.1" >/dev/null 2>&1
+	printf 'subjectAltName=IP:127.0.0.1\n' > "$WORK/san.cnf"
+	openssl x509 -req -in "$WORK/srv.csr" -CA "$WORK/ca.crt" -CAkey "$WORK/ca.key" \
+		-CAcreateserial -out "$WORK/srv.crt" -days 30 -extfile "$WORK/san.cnf" >/dev/null 2>&1
+	# A header that defines network/ca_certs.h's guard, so a build that
+	# includes it first trusts this CA and nothing else.
+	{
+		echo '/* Throwaway CA for dev/testnet. Generated. */'
+		echo '#ifndef PSPDX_CA_CERTS_H'
+		echo '#define PSPDX_CA_CERTS_H'
+		echo 'static const char PSPDX_CA_PEM[] ='
+		sed 's/.*/"&\\n"/' "$WORK/ca.crt"
+		echo ';'
+		echo '#endif'
+	} > "$WORK/testca.h"
+}
+
+config() {
+	mkdir -p "$WORK/hs/lib" "$WORK/hs/run"
+	cp "$WORK/srv.crt" "$WORK/srv.key" "$WORK/hs/"
+	# No public DERP map: the tailnet is the loopback, and the only relay a
+	# node is offered is Headscale's own, region 999.
+	cat > "$WORK/hs/config.yaml" <<EOF
+server_url: $URL
+listen_addr: 127.0.0.1:$PORT
+metrics_listen_addr: 127.0.0.1:19090
+grpc_listen_addr: 127.0.0.1:50444
+tls_cert_path: /etc/headscale/srv.crt
+tls_key_path: /etc/headscale/srv.key
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: testnet
+    region_name: testnet
+    verify_clients: true
+    stun_listen_addr: 127.0.0.1:13478
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+    ipv4: 127.0.0.1
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 24h
+disable_check_updates: true
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+log:
+  level: info
+policy:
+  mode: file
+  path: ""
+dns:
+  magic_dns: false
+  override_local_dns: false
+  nameservers:
+    global: []
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+EOF
+}
+
+hs() { docker exec "$HS" headscale "$@"; }
+
+wait_hs() {
+	for i in $(seq 1 50); do
+		hs users list >/dev/null 2>&1 && return 0
+		sleep 0.2
+	done
+	echo "headscale did not come up:" >&2
+	docker logs --tail 30 "$HS" >&2
+	return 1
+}
+
+start_hs() {
+	docker rm -f "$HS" >/dev/null 2>&1 || true
+	# Rootless Docker: root in the container is the invoking user outside,
+	# so what Headscale writes into the work directory stays ours.
+	docker run -d --name "$HS" --network host \
+		-v "$WORK/hs/config.yaml:/etc/headscale/config.yaml:ro" \
+		-v "$WORK/hs/srv.crt:/etc/headscale/srv.crt:ro" \
+		-v "$WORK/hs/srv.key:/etc/headscale/srv.key:ro" \
+		-v "$WORK/hs/lib:/var/lib/headscale" \
+		-v "$WORK/hs/run:/var/run/headscale" \
+		headscale/headscale:latest serve >/dev/null
+	wait_hs
+	[ -n "$(user_id)" ] || hs users create psp >/dev/null
+}
+
+# The user's numeric id, which v0.29's preauthkeys wants in place of a name;
+# empty while there is no such user.
+user_id() {
+	hs users list -o json | python3 -c 'import json,sys
+print("".join(str(u["id"]) for u in json.load(sys.stdin) or [] if u["name"] == "psp"))'
+}
+
+key() {
+	hs preauthkeys create --user "$(user_id)" --reusable --expiration 24h -o json \
+		| python3 -c 'import json,sys; print(json.load(sys.stdin)["key"])'
+}
+
+peer() { tailscale --socket="$PEER_SOCK" "$@"; }
+
+start_peer() {
+	systemctl --user stop "$PEER_UNIT" 2>/dev/null || true
+	mkdir -p "$WORK/peer"
+	# SSL_CERT_FILE replaces Go's system roots with the testnet CA, so the
+	# peer reaches Headscale and its DERP over the same TLS the PSP uses.
+	systemd-run --user --collect --quiet --unit="$PEER_UNIT" \
+		--setenv=SSL_CERT_FILE="$WORK/ca.crt" \
+		--setenv=TS_NO_LOGS_NO_SUPPORT=true \
+		tailscaled --tun=userspace-networking --statedir="$WORK/peer" \
+		--socket="$PEER_SOCK" --port=41642 --no-logs-no-support
+	for i in $(seq 1 50); do
+		[ -S "$PEER_SOCK" ] && break
+		sleep 0.2
+	done
+	peer up --login-server="$URL" --authkey="$(key)" --hostname=peer --accept-dns=false
+}
+
+case "${1:-}" in
+	up)
+		certs
+		config
+		start_hs
+		start_peer
+		peer ip -4 | sed 's/^/peer /'
+		echo "auth key: $(key)"
+		;;
+	down)
+		systemctl --user stop "$PEER_UNIT" 2>/dev/null || true
+		docker rm -f "$HS" >/dev/null 2>&1 || true
+		;;
+	reset)
+		systemctl --user stop "$PEER_UNIT" 2>/dev/null || true
+		docker rm -f "$HS" >/dev/null 2>&1 || true
+		rm -rf "$WORK/hs" "$WORK/peer"
+		;;
+	key) key ;;
+	peer) shift; peer "$@" ;;
+	hs) shift; hs "$@" ;;
+	*) sed -n '2,/^set -e/p' "$0" | sed '$d;s/^# \{0,1\}//' >&2; exit 2 ;;
+esac

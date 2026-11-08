@@ -1,0 +1,14 @@
+#!/bin/sh
+# Builds the host client and runs it against the testnet for a while,
+# pinging every peer every few seconds. testnet up has to have run.
+#
+#   host/run [seconds] [more tailscale-host options]
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd)"
+TS="$(cd "$HERE/.." && pwd)"
+SECS="${1:-30}"
+[ $# -gt 0 ] && shift
+make -C "$HERE" -s tailscale-host
+KEY="$("$TS/dev/testnet" key)"
+exec "$HERE/tailscale-host" --server https://127.0.0.1:18443 --authkey "$KEY" \
+	--state "$TS/work/host-state" --hostname psp-host --ping 5 --run "$SECS" "$@"
