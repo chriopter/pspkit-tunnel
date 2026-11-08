@@ -204,7 +204,9 @@ static int cycle(int n, const char *scenario) {
     say("cycle %d %s: %s, keys %s", n, scenario, name, had ? "kept" : "none");
 
     if (!strcmp(scenario, "badkey")) {
-        tunnel_start("tskey-auth-kXXXXXXXXXXCNTRL-notarealkeyatall0000000000000");
+        /* Not a key, and not shaped like one either, or secret scanners
+           take it for a leaked one: the server only has to refuse it. */
+        tunnel_start("tskey-auth-" "not-a-real-key");
         enum tunnel_state st = settle(text, sizeof(text), 30);
         pass = st == TUNNEL_FAILED && !tunnel_has_keys();
         say("cycle %d badkey: state %d \"%s\" in %.2f s, keys %s -> %s", n, st, text, secs(t0),

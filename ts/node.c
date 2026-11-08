@@ -176,7 +176,13 @@ void node_stop(struct node *n) {
 
 void node_step(struct node *n) {
     uint32_t now = plat_ms();
-    if (!n->control && (int32_t)(now - n->control_retry) >= 0) {
+    /* A server that said no -- the key refused, or this device no longer
+       in the tailnet -- says it again to every retry: asking is left for
+       a setup with a new key, and every request through the tunnel fails
+       at once instead of waiting for it. A server not reached is asked
+       again. */
+    int said_no = (n->auth_url[0] && !n->interactive) || !strncmp(n->status, "refused", 7);
+    if (!n->control && !said_no && (int32_t)(now - n->control_retry) >= 0) {
         if (control_start(n) < 0) n->control_retry = plat_ms() + CONTROL_RETRY_MS;
     }
     control_poll(n);
