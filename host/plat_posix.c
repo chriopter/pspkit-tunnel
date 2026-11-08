@@ -15,6 +15,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <wolfssl/options.h>
+#include <wolfssl/ssl.h>
+
 #include "ts/plat.h"
 
 const char *plat_state_dir = ".";
@@ -163,3 +166,23 @@ int plat_udp_recv(int fd, void *buf, size_t len, uint32_t *ip, uint16_t *port) {
 }
 
 void plat_udp_close(int fd) { close(fd); }
+
+/* The system's roots, as anything else on the desk trusts them; under
+   dev/testnet the throwaway CA its testca.h carries, and nothing else. */
+int plat_trust(void *wolfssl_ctx) {
+#ifdef TUNNEL_TEST_CA_PEM
+    return wolfSSL_CTX_load_verify_buffer(wolfssl_ctx, (const unsigned char *)TUNNEL_TEST_CA_PEM,
+                                          (long)sizeof(TUNNEL_TEST_CA_PEM) - 1,
+                                          WOLFSSL_FILETYPE_PEM) == WOLFSSL_SUCCESS;
+#else
+    static const char *const bundles[] = {
+        "/etc/ssl/certs/ca-certificates.crt",   /* Debian, Arch */
+        "/etc/pki/tls/certs/ca-bundle.crt",     /* Fedora */
+    };
+    for (size_t i = 0; i < sizeof(bundles) / sizeof(bundles[0]); i++)
+        if (wolfSSL_CTX_load_verify_locations(wolfssl_ctx, bundles[i], NULL) == WOLFSSL_SUCCESS)
+            return 1;
+    plat_log("tls: no system roots found");
+    return 0;
+#endif
+}

@@ -36,16 +36,13 @@ certs() {
 	printf 'subjectAltName=IP:127.0.0.1\n' > "$WORK/san.cnf"
 	openssl x509 -req -in "$WORK/srv.csr" -CA "$WORK/ca.crt" -CAkey "$WORK/ca.key" \
 		-CAcreateserial -out "$WORK/srv.crt" -days 30 -extfile "$WORK/san.cnf" >/dev/null 2>&1
-	# A header that defines network/ca_certs.h's guard, so a build that
-	# includes it first trusts this CA and nothing else.
+	# The host build forces this in first: with it, host/plat_posix.c
+	# trusts this CA and nothing else.
 	{
 		echo '/* Throwaway CA for dev/testnet. Generated. */'
-		echo '#ifndef PSPDX_CA_CERTS_H'
-		echo '#define PSPDX_CA_CERTS_H'
-		echo 'static const char PSPDX_CA_PEM[] ='
-		sed 's/.*/"&\\n"/' "$WORK/ca.crt"
-		echo ';'
-		echo '#endif'
+		echo '#define TUNNEL_TEST_CA_PEM \\'
+		sed 's/.*/"&\\n" \\/' "$WORK/ca.crt"
+		echo '""'
 	} > "$WORK/testca.h"
 }
 

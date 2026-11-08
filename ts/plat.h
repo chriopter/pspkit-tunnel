@@ -18,6 +18,11 @@ void plat_sleep_ms(unsigned ms);
 void plat_random(void *out, size_t len);
 void plat_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+/* The roots a TLS connection is checked against, parsed into a wolfSSL
+   context: on the console pspkit-https's, which it keeps current, on the
+   desk the system's (or a test network's own CA). How many, 0 for none. */
+int plat_trust(void *wolfssl_ctx);
+
 /* Files beside the program. load returns the bytes read or -1. */
 int plat_load(const char *name, void *buf, size_t max);
 int plat_save(const char *name, const void *buf, size_t len);

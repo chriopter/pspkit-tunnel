@@ -9,7 +9,6 @@
 #include <wolfssl/options.h>
 #include <wolfssl/ssl.h>
 
-#include "network/ca_certs.h"
 #include "ts/node.h"
 #include "ts/plat.h"
 #include "ts/tcp.h"
@@ -132,8 +131,7 @@ int fetch(struct node *n, const char *url, const char *basic, unsigned timeout_s
     if (tls) {
         uint32_t t1 = plat_ms();
         ctx = wolfSSL_CTX_new(wolfTLSv1_3_client_method());
-        wolfSSL_CTX_load_verify_buffer(ctx, (const unsigned char *)PSPDX_CA_PEM, (long)strlen(PSPDX_CA_PEM),
-                                       WOLFSSL_FILETYPE_PEM);
+        plat_trust(ctx);
         wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER, verify_ignoring_dates);
         wolfSSL_CTX_SetIORecv(ctx, io_recv);
         wolfSSL_CTX_SetIOSend(ctx, io_send);

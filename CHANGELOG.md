@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- The coordination server and the relays are checked against pspkit-https's roots (0.2.12's `https_load_roots`), which that library keeps current every week, instead of a fixed bundle of the tunnel's own; an application carries one set of roots, not two
+- The desk build trusts the system's roots
+
 ## 1.0.0
 
 - A PSP joins a tailnet with one auth key and keeps its own keys in `tunnel.key`; `tunnel_forget()` logs it out again and deletes them

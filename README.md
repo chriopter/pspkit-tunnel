@@ -38,7 +38,7 @@ include lib/pspkit-https/module.mk
 include lib/pspkit-tunnel/module.mk
 ```
 
-Needs [pspkit-https](https://github.com/chriopter/pspkit-https) 0.2.11 or
+Needs [pspkit-https](https://github.com/chriopter/pspkit-https) 0.2.12 or
 later, whose wolfSSL does the TLS; the application links cJSON (`-lcjson`).
 
 **2. Join once, then route a host through it.**

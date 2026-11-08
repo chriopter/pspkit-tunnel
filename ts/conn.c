@@ -4,7 +4,6 @@
 #include <wolfssl/options.h>
 #include <wolfssl/ssl.h>
 
-#include "network/ca_certs.h"
 #include "ts/conn.h"
 #include "ts/plat.h"
 
@@ -80,10 +79,8 @@ static WOLFSSL_CTX *shared_ctx(void) {
     WOLFSSL_CTX *x = wolfSSL_CTX_new(wolfTLSv1_3_client_method());
     if (!x) return NULL;
     wolfSSL_CTX_set_cipher_list(x, "TLS13-CHACHA20-POLY1305-SHA256:TLS13-AES128-GCM-SHA256");
-    if (wolfSSL_CTX_load_verify_buffer(x, (const unsigned char *)PSPDX_CA_PEM,
-                                       (long)sizeof(PSPDX_CA_PEM) - 1,
-                                       WOLFSSL_FILETYPE_PEM) != WOLFSSL_SUCCESS) {
-        plat_log("tls: CA bundle rejected");
+    if (plat_trust(x) <= 0) {
+        plat_log("tls: no roots to check a server against");
         wolfSSL_CTX_free(x);
         return NULL;
     }

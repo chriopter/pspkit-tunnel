@@ -26,6 +26,7 @@
 #include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+#include "pspkit-https/https.h"
 #include "psp/plat_psp.h"
 #include "ts/plat.h"
 
@@ -150,6 +151,10 @@ int plat_exists(const char *name) {
     state_path(path, sizeof(path), name);
     return sceIoGetstat(path, &st) >= 0;
 }
+
+/* pspkit-https's roots: Mozilla's, updated there every week, and already in
+   every application that has the tunnel, since the tunnel needs it. */
+int plat_trust(void *wolfssl_ctx) { return https_load_roots(wolfssl_ctx); }
 
 /* ------------------------------------------------------------------- net */
 
