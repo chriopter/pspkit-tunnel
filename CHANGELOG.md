@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- A device the coordination server has refused -- a key it does not take, or a device no longer in the tailnet -- stops asking again: `tunnel_state()` says why, and every request through the tunnel fails at once instead of waiting twenty seconds for a tunnel that will not come. A setup with a new key starts it afresh
+
 ## 1.1.0
 
 - The coordination server and the relays are checked against pspkit-https's roots (0.2.12's `https_load_roots`), which that library keeps current every week, instead of a fixed bundle of the tunnel's own; an application carries one set of roots, not two
